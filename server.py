@@ -50,4 +50,5 @@ def query():
     return jsonify(response)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=80, debug=True)
+    port = os.getenv('PORT', 8080)
+    app.run(host='0.0.0.0', port=port, debug=True)
