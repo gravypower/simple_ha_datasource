@@ -22,7 +22,7 @@ def search():
 
 @app.route('/query', methods=['POST'])
 def query():
-    req = request.get_json()
+    req = request.get_json() 
     
     response = []
     headers = {
@@ -50,4 +50,4 @@ def query():
     return jsonify(response)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=80, debug=True)
