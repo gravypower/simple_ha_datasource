@@ -31,6 +31,48 @@ def query():
         "content-type": "application/json",
     }
 
+    for target in req['targets']:
+        entity_id = target['target']
+        url = f"{HOME_ASSISTANT_URL}/api/history/period/{req['range']['from']}"
+        params = {
+            'filter_entity_id': entity_id,
+            'end_time': req['range']['to']
+        }
+        
+        # Query Home Assistant for the entity's historical data
+        ha_response = requests.get(url, headers=headers, params=params)
+        if ha_response.status_code == 200:
+            data = ha_response.json()
+            
+            # Format the data for Grafana
+            datapoints = []
+            for state in data[0]:  # Assuming only one entity is returned
+                try:
+                    # Attempt to convert the state to a float
+                    value = float(state['state'])
+                except ValueError:
+                    # If conversion fails, append null
+                    value = None
+                
+                timestamp = datetime.strptime(state['last_changed'], '%Y-%m-%dT%H:%M:%S.%f%z').timestamp() * 1000
+                datapoints.append([value, timestamp])
+                
+            response.append({"target": entity_id, "datapoints": datapoints})
+        else:
+            # Handle errors or entities not found
+            print(f"Failed to fetch data for {entity_id}: {ha_response.status_code} - {ha_response.text}")
+            response.append({"target": entity_id, "datapoints": []})
+
+    return jsonify(response)
+
+    req = request.get_json()
+    
+    response = []
+    headers = {
+        "Authorization": f"Bearer {HOME_ASSISTANT_TOKEN}",
+        "content-type": "application/json",
+    }
+
     # Grafana provides the start and end time of the period we want to query
     start_time = req['range']['from']
     end_time = req['range']['to']
