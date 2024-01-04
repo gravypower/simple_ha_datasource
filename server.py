@@ -93,4 +93,5 @@ def query_data():
 # Add more routes as per your OpenAPI spec
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = os.getenv('PORT', 8080)
+    app.run(host='0.0.0.0', port=port, debug=True)
