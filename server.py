@@ -23,7 +23,7 @@ def test_connection():
 @app.route('/metrics', methods=['POST'])
 def list_metrics():
     headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Authorization": f"Bearer {HOME_ASSISTANT_TOKEN}",
         "content-type": "application/json",
     }
     
