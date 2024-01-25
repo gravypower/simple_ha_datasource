@@ -2,50 +2,46 @@ from flask import Flask, jsonify, request, abort
 from datetime import datetime
 import requests
 import os
+import logging
 
 app = Flask(__name__)
 
 # Retrieve Home Assistant URL and access token from environment variables
 HOME_ASSISTANT_URL = os.getenv('HOME_ASSISTANT_URL')
-HOME_ASSISTANT_TOKEN = os.getenv('HOME_ASSISTANT_ACCESS_TOKEN')
+HOME_ASSISTANT_TOKEN = os.getenv('HOME_ASSISTANT_TOKEN')
 
 headers = {
     "Authorization": f"Bearer {HOME_ASSISTANT_TOKEN}",
     "content-type": "application/json",
 }
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 # Test connection endpoint
 @app.route('/', methods=['GET'])
 def test_connection():
     return jsonify({"message": "Connection successful"})
 
-# List available metrics endpoint
 @app.route('/metrics', methods=['POST'])
 def list_metrics():
-    headers = {
-        "Authorization": f"Bearer {HOME_ASSISTANT_TOKEN}",
-        "content-type": "application/json",
-    }
-    
-    # URL for the states endpoint
     url = f"{HOME_ASSISTANT_URL}/api/states"
-    
-    # Make a GET request to the states endpoint
     response = requests.get(url, headers=headers)
-    
-    if response.status_code == 200:
-        # Parse the JSON response
-        states = response.json()
-        
-        # Extract and print the entity_id and state for each entity
-        for state in states:
-            print(f"Entity ID: {state['entity_id']}, State: {state['state']}")
-            
-        return states  # or format this as needed
-    else:
-        print(f"Failed to fetch states: {response.status_code} - {response.text}")
-        return []
 
+    if response.status_code == 200:
+        states = response.json()
+        metrics = []
+
+        for state in states:
+            attributes = state.get('attributes', {})
+            if attributes.get('state_class') == 'measurement':
+                entity_id = state['entity_id']
+                # Use the friendly name if available, otherwise default to entity_id
+                friendly_name = attributes.get('friendly_name', entity_id)
+                metrics.append({"label": friendly_name, "value": entity_id})
+
+        return jsonify(metrics)
+    else:
+        abort(response.status_code, description=response.text)
 
 # List the available payload options endpoint
 @app.route('/metric-payload-options', methods=['POST'])
