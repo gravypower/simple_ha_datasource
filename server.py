@@ -1,10 +1,12 @@
-from flask import Flask, jsonify, request, abort
-from datetime import datetime
-import requests
+from sanic import Sanic
+from sanic.response import json
 import os
 import logging
+import httpx
+import json as j
+from WebSocketClient import WebSocketClient
 
-app = Flask(__name__)
+app = Sanic(__name__)
 
 # Retrieve Home Assistant URL and access token from environment variables
 HOME_ASSISTANT_URL = os.getenv('HOME_ASSISTANT_URL')
@@ -17,77 +19,81 @@ headers = {
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+@app.listener('before_server_start')
+async def setup_websocket_client(app, loop):
+    global ws_client
+    ws_client = WebSocketClient(f"ws://{HOME_ASSISTANT_URL}/api/websocket", HOME_ASSISTANT_TOKEN)
+    await ws_client.connect()
+
 # Test connection endpoint
-@app.route('/', methods=['GET'])
-def test_connection():
-    return jsonify({"message": "Connection successful"})
+@app.route('/')
+async def test_connection(request):
+    return json({"message": "Connection successful"})
 
 @app.route('/metrics', methods=['POST'])
-def list_metrics():
-    url = f"{HOME_ASSISTANT_URL}/api/states"
-    response = requests.get(url, headers=headers)
+async def list_metrics(request):
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"https://{HOME_ASSISTANT_URL}/api/states", headers=headers)
 
-    if response.status_code == 200:
-        states = response.json()
-        metrics = []
+        if response.status_code == 200:
+            states = response.json()
+            metrics = []
 
-        for state in states:
-            attributes = state.get('attributes', {})
-            if attributes.get('state_class') == 'measurement':
-                entity_id = state['entity_id']
-                # Use the friendly name if available, otherwise default to entity_id
-                friendly_name = attributes.get('friendly_name', entity_id)
-                metrics.append({"label": friendly_name, "value": entity_id})
+            for state in states:
+                attributes = state.get('attributes', {})
+                if attributes.get('state_class') == 'measurement':
+                    entity_id = state['entity_id']
+                    friendly_name = attributes.get('friendly_name', entity_id)
+                    metrics.append({"label": friendly_name, "value": entity_id})
 
-        return jsonify(metrics)
-    else:
-        abort(response.status_code, description=response.text)
+            return json(metrics)
+        else:
+            return json({'error': response.text}, status=response.status_code)
 
-# List the available payload options endpoint
+
 @app.route('/metric-payload-options', methods=['POST'])
-def list_metric_payload_options():
-    data = request.json
-    return jsonify({"message": "List of metric payload options will be here"})
+async def list_metric_payload_options(request):
+    # Your logic here
+    return json({"message": "List of metric payload options will be here"})
 
 # Query endpoint (assuming it's a POST method, adjust as needed)
 @app.route('/query', methods=['POST'])
-def query_data():
-    req = request.get_json()
+async def query_data(request):
+    req = request.json
+
+    targets = req['targets']
+    start_time = req['range']['from']
+    end_time = req['range']['to']
+
     response = []
-    headers = {
-        "Authorization": f"Bearer {HOME_ASSISTANT_TOKEN}",
-        "content-type": "application/json",
-    }
+    for target in targets:
+        statistic_id = target['target']
 
-    for target in req['targets']:
-        entity_id = target['target']
-        url = f"{HOME_ASSISTANT_URL}/api/history/period/{req['range']['from']}"
-        params = {
-            'filter_entity_id': entity_id,
-            'end_time': req['range']['to']
-        }
-        
-        ha_response = requests.get(url, headers=headers, params=params)
-        if ha_response.status_code == 200:
-            data = ha_response.json()
-            datapoints = []
-            for state in data[0]:
-                try:
-                    value = float(state['state'])
-                except ValueError:
-                    value = None
-                
-                timestamp = datetime.strptime(state['last_changed'], '%Y-%m-%dT%H:%M:%S.%f%z').timestamp() * 1000
-                datapoints.append([value, timestamp])
-                
-            response.append({"target": entity_id, "datapoints": datapoints})
+        try:
+            # ... existing logic ...
+            statistics = await ws_client.fetch_statistics(statistic_id, start_time, end_time)
+            logging.info(f"Statistics received: {j.dumps(statistics, indent=4)}")
+            if statistics is None:
+                return json({'error': 'Failed to fetch statistics'}, status=500)
+            # ... process and return the response ...
+        except Exception as e:
+            logging.error(f"Error in query_data: {e}")
+            return json({'error': 'Internal server error'}, status=500)
+
+        if statistics['success'] and statistic_id in statistics['result']:
+            datapoints = [
+                [data_point['mean'], data_point['start']]  # Or use 'end' based on your requirement
+                for data_point in statistics['result'][statistic_id]
+            ]
+            response.append({
+                "target": statistic_id,
+                "datapoints": datapoints
+            })
         else:
-            # Return an error response to Grafana
-            abort(500, description=f"Failed to fetch data for {entity_id}: {ha_response.status_code} - {ha_response.text}")
+            logging.error(f"Failed to fetch data for {statistic_id}")
 
-    return jsonify(response)
+    return json(response)
 
-# Add more routes as per your OpenAPI spec
 
 if __name__ == '__main__':
     port = os.getenv('PORT', 8080)
