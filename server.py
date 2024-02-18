@@ -4,6 +4,7 @@ import os
 import logging
 import httpx
 import json as j
+from dateutil import parser
 from WebSocketClient import WebSocketClient
 
 app = Sanic(__name__)
@@ -17,12 +18,14 @@ headers = {
     "content-type": "application/json",
 }
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO , format='%(asctime)s - %(levelname)s - %(message)s')
 
 @app.listener('before_server_start')
 async def setup_websocket_client(app, loop):
     global ws_client
-    ws_client = WebSocketClient(f"ws://{HOME_ASSISTANT_URL}/api/websocket", HOME_ASSISTANT_TOKEN)
+    haWebsocketUrl = f"wss://{HOME_ASSISTANT_URL}/api/websocket"
+    ws_client = WebSocketClient(haWebsocketUrl, HOME_ASSISTANT_TOKEN)
+    logging.info(f'haWebsocketUrl: {haWebsocketUrl}')
     await ws_client.connect()
 
 # Test connection endpoint
@@ -61,36 +64,31 @@ async def list_metric_payload_options(request):
 async def query_data(request):
     req = request.json
 
-    targets = req['targets']
-    start_time = req['range']['from']
-    end_time = req['range']['to']
+    start_time_str = req['range']['from']
+    end_time_str = req['range']['to']
+
+    # Convert string to datetime objects
+    start_time = parser.parse(start_time_str)
+    end_time = parser.parse(end_time_str)
+
+    start_time_iso = start_time.isoformat(timespec='seconds')
+    end_time_iso = end_time.isoformat(timespec='seconds')
 
     response = []
-    for target in targets:
+    for target in req['targets']:
         statistic_id = target['target']
-
-        try:
-            # ... existing logic ...
-            statistics = await ws_client.fetch_statistics(statistic_id, start_time, end_time)
-            logging.info(f"Statistics received: {j.dumps(statistics, indent=4)}")
-            if statistics is None:
-                return json({'error': 'Failed to fetch statistics'}, status=500)
-            # ... process and return the response ...
-        except Exception as e:
-            logging.error(f"Error in query_data: {e}")
-            return json({'error': 'Internal server error'}, status=500)
-
-        if statistics['success'] and statistic_id in statistics['result']:
-            datapoints = [
-                [data_point['mean'], data_point['start']]  # Or use 'end' based on your requirement
-                for data_point in statistics['result'][statistic_id]
-            ]
-            response.append({
-                "target": statistic_id,
-                "datapoints": datapoints
-            })
-        else:
+        
+        statistics = await ws_client.fetch_statistics(statistic_id, start_time_iso, end_time_iso)
+        logging.debug(f"Statistics received: {j.dumps(statistics, indent=4)}")
+        # Assuming fetch_statistics returns None if it fails but doesn't raise an exception
+        if not statistics or not statistics['success']:
             logging.error(f"Failed to fetch data for {statistic_id}")
+            continue  # Skip this iteration and proceed with the next target
+
+        datapoints = [[dp['mean'], dp['start']] for dp in statistics['result'][statistic_id]]
+        response.append({"target": statistic_id, "datapoints": datapoints})
+
+        
 
     return json(response)
 

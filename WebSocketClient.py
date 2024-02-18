@@ -20,9 +20,19 @@ class WebSocketClient:
         loop.run_until_complete(self.connect())
         loop.run_forever()
 
-    async def connect(self):
-        self.websocket = await websockets.connect(self.uri)
-        await self.authenticate()
+    async def connect(self, retries=3, delay=1):
+        for attempt in range(retries):
+            try:
+                self.websocket = await websockets.connect(self.uri, timeout=10)  # Adjust timeout as needed
+                await self.authenticate()
+                break  # Connection successful
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed) as e:
+                logging.warning(f"WebSocket connection attempt {attempt+1}/{retries} failed: {e}")
+                if attempt < retries - 1:
+                    await asyncio.sleep(delay)
+                    delay *= 2  # Exponential backoff
+                else:
+                    raise  # Re-raise the exception after the last retry
 
     async def authenticate(self):
         auth_message = {
@@ -31,7 +41,7 @@ class WebSocketClient:
         }
         await self.websocket.send(json.dumps(auth_message))
         auth_response = await self.websocket.recv()
-        logging.info(f"Auth response: {auth_response}")
+        logging.debug(f"Auth response: {auth_response}")
         auth_response = json.loads(auth_response)
 
         if auth_response['type'] == 'auth_invalid':
@@ -68,11 +78,13 @@ class WebSocketClient:
             "types": ["mean", "state"],
             "id": request_id
         }
-        logging.info(f"sending: {json.dumps(stats_request, indent=4)}")
+
+        logging.debug(f"sending: {json.dumps(stats_request, indent=4)}")
         response = await self.send(stats_request)
         if response is None:
             logging.error("Received None response in fetch_statistics")
             return None  # Or handle this case as needed
+        
         parsed_response = json.loads(response)
-        logging.info(f"WebSocket API response: {parsed_response}")
+        logging.debug(f"WebSocket API response: {parsed_response}")
         return parsed_response
