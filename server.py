@@ -18,7 +18,14 @@ headers = {
     "content-type": "application/json",
 }
 
-logging.basicConfig(level=logging.INFO , format='%(asctime)s - %(levelname)s - %(message)s')
+# Retrieve the logging level from an environment variable
+logging_level_str = os.getenv('LOGGING_LEVEL', 'INFO')
+
+# Translate the logging level from string to logging module constant
+logging_level = getattr(logging, logging_level_str.upper(), logging.INFO)
+
+# Apply the logging configuration with the retrieved level
+logging.basicConfig(level=logging_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
 @app.listener('before_server_start')
 async def setup_websocket_client(app, loop):
@@ -59,39 +66,45 @@ async def list_metric_payload_options(request):
     # Your logic here
     return json({"message": "List of metric payload options will be here"})
 
-# Query endpoint (assuming it's a POST method, adjust as needed)
 @app.route('/query', methods=['POST'])
 async def query_data(request):
     req = request.json
-
     start_time_str = req['range']['from']
     end_time_str = req['range']['to']
 
-    # Convert string to datetime objects
-    start_time = parser.parse(start_time_str)
-    end_time = parser.parse(end_time_str)
+    # Convert string to datetime objects and then to ISO format
+    start_time = format_datetime(start_time_str)
+    end_time = format_datetime(end_time_str)
 
-    start_time_iso = start_time.isoformat(timespec='seconds')
-    end_time_iso = end_time.isoformat(timespec='seconds')
+    # Extract all entity_ids from the request
+    entity_ids = [target['target'] for target in req['targets']]
 
+    # Fetch statistics for all ids at once
+    statistics = await ws_client.fetch_statistics(entity_ids, start_time, end_time)
+    logging.debug(f"Statistics received: {j.dumps(statistics, indent=4)}")
+
+    # Process the response and construct the output
     response = []
-    for target in req['targets']:
-        statistic_id = target['target']
-        
-        statistics = await ws_client.fetch_statistics(statistic_id, start_time_iso, end_time_iso)
-        logging.debug(f"Statistics received: {j.dumps(statistics, indent=4)}")
-        # Assuming fetch_statistics returns None if it fails but doesn't raise an exception
-        if not statistics or not statistics['success']:
-            logging.error(f"Failed to fetch data for {statistic_id}")
-            continue  # Skip this iteration and proceed with the next target
-
-        datapoints = [[dp['mean'], dp['start']] for dp in statistics['result'][statistic_id]]
-        response.append({"target": statistic_id, "datapoints": datapoints})
-
-        
+    if statistics and statistics.get('success', False):
+        for statistic_id in entity_ids:
+            # Assuming your API returns data in a format that needs to be processed here
+            # This part highly depends on the actual structure of the response
+            datapoints = [[dp['mean'], dp['start']] for dp in statistics['result'][statistic_id]]
+            response.append({"target": statistic_id, "datapoints": datapoints})
+    else:
+        logging.error("Failed to fetch data")
 
     return json(response)
 
+def format_datetime(datetime_str):
+    # Parse the datetime string to a datetime object
+    dt = parser.parse(datetime_str)
+    
+    # Format the datetime object to the specified format
+    # Note: The '%f' directive represents microseconds, which we limit to 3 digits for milliseconds
+    formatted_datetime = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+    
+    return formatted_datetime
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 8080))
