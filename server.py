@@ -19,10 +19,10 @@ headers = {
 }
 
 # Retrieve the logging level from an environment variable
-logging_level_str = os.getenv('LOGGING_LEVEL', 'DEBUG')
+logging_level_str = os.getenv('LOGGING_LEVEL', 'INFO')
 
 # Translate the logging level from string to logging module constant
-logging_level = getattr(logging, logging_level_str.upper(), logging.DEBUG)
+logging_level = getattr(logging, logging_level_str.upper(), logging.INFO)
 
 # Apply the logging configuration with the retrieved level
 logging.basicConfig(level=logging_level, format='%(asctime)s - %(levelname)s - %(message)s')
