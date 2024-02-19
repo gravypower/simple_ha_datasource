@@ -34,28 +34,59 @@ class WebSocketClient:
             request_id = await self.get_next_request_id()
             message['id'] = request_id
             self.pending_responses[request_id] = asyncio.Future()
+            logging.debug(f"Sending request: {json.dumps(message, indent=4)}")
             await self.websocket.send(json.dumps(message))
-            return await self.wait_for_response(request_id)
+            responseMessage = await self.wait_for_response(request_id)
+            logging.debug(f"Recived response message: {json.dumps(responseMessage, indent=4)}")
+            return responseMessage
 
     async def get_next_request_id(self):
         async with self.request_id_lock:
             self.request_id += 1
             return self.request_id
 
-    async def wait_for_response(self, request_id):
+    async def wait_for_response(self, request_id, timeout=10):
+        # Ensure the request_id exists in pending_responses
+        if request_id not in self.pending_responses:
+            raise ValueError(f"No pending request with ID {request_id}")
+
         future = self.pending_responses[request_id]
-        await future
+        
+        try:
+            # Wait for the future with a timeout
+            await asyncio.wait_for(future, timeout)
+        except asyncio.TimeoutError:
+            logging.error(f"Timeout waiting for response to request ID {request_id}")
+            return {"error": "timeout", "id": request_id}
+        finally:
+            # Clean up regardless of whether a response was received or a timeout occurred
+            del self.pending_responses[request_id]
+
         response = future.result()
-        del self.pending_responses[request_id]
+
+        # Here, you might want to add additional handling for any error fields in the response
+        if "error" in response:
+            logging.error(f"Error response received for request ID {request_id}: {response['error']}")
+
         return response
 
     async def listen_for_responses(self):
-        while True:
-            response = await self.websocket.recv()
-            response_data = json.loads(response)
-            request_id = response_data.get('id')
-            if request_id in self.pending_responses:
-                self.pending_responses[request_id].set_result(response_data)
+        try:
+            while True:
+                response = await self.websocket.recv()
+                try:
+                    response_data = json.loads(response)
+                    request_id = response_data.get('id')
+                    if request_id and request_id in self.pending_responses:
+                        self.pending_responses[request_id].set_result(response_data)
+                    else:
+                        logging.warning(f"Unmatched or invalid response received: {response}")
+                except json.JSONDecodeError:
+                    logging.error(f"Failed to parse response as JSON: {response}")
+        except websockets.exceptions.ConnectionClosed:
+            logging.error("WebSocket connection closed unexpectedly.")
+            # Implement reconnection logic here if needed
+
 
     async def fetch_statistics(self, entity_ids, start_time, end_time):
         stats_request = {
@@ -66,7 +97,4 @@ class WebSocketClient:
             "period": "hour",
             "types": ["mean", "state"]
         }
-        logging.debug(f"Sending stats request: {json.dumps(stats_request, indent=4)}")
-        response = await self.send(stats_request)
-        logging.debug(f"Statistics response:  {json.dumps(response, indent=4)}")
-        return response
+        return await self.send(stats_request)
